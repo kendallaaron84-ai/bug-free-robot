@@ -1,136 +1,151 @@
-// app/api/verify-entitlement/route.ts
+// app/api/agent/deploy/route.ts
 import { NextResponse } from "next/server";
+import { getApps, initializeApp, cert } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore"; 
 import path from "path";
 import fs from "fs";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
+  // Safe clone to print parameters payload to the console tracking log
+  const rawBody = await request.clone().json();
+  console.log("📥 AGENT HIT! Raw parameters payload dropped:", rawBody);
+
   try {
     const body = await request.json();
-    const { userEmail, userPhone, phone, assetKey, requestingDomain } = body;
-
-    // 🚀 FIXED: Allow verification if EITHER email or phone is present alongside the assetKey
-    const activeEmail = userEmail ? userEmail.toLowerCase().trim() : null;
-    const activePhone = phone || userPhone || null;
-
-    if (!assetKey || (!activeEmail && !activePhone)) {
-      return NextResponse.json({ 
-        authenticated: false, 
-        error: "Missing required identification keys. Provide email or phone context." 
-      }, { 
-        status: 400,
-        headers: { "Access-Control-Allow-Origin": "*" }
-      });
+    
+    // Core payload properties with defensive fallbacks
+    const authorEmail = body.authorEmail || "kendallaaron84@gmail.com";
+    const bookTitle = body.bookTitle || body.title || "Untitled Sovereign Publication Asset";
+    const statusState = body.status || "Active"; 
+    
+    let price = "0.00";
+    if (body.price !== undefined && body.price !== null && body.price !== "") {
+      price = body.price.toString();
     }
 
-    // 🔥 Dynamic runtime import with default export mapping
-    const firebaseAdmin = require("firebase-admin");
-    const admin = firebaseAdmin.default || firebaseAdmin;
+    const type = body.type || "Audiobook";
+    const authorName = body.authorName || "Kendall Aaron";
+    const synopsis = body.synopsis || "";
+    const sections = body.sections || ["Featured Publications"];
+    const coverUrl = body.coverUrl || body.coverArtUrl || "";
+    const bgImageUrl = body.bgImageUrl || "";
+    const ebookPayload = body.ebookPayload || null;
 
-    // 🔑 Safety check before ever touching .length
-    if (!admin || !admin.apps || !admin.apps.length) {
-      try {
-        const keyPath = path.resolve(process.cwd(), "secrets/firebase-service-account.json");
-        
-        if (fs.existsSync(keyPath)) {
-          const serviceAccount = JSON.parse(fs.readFileSync(keyPath, "utf8"));
-          
-          admin.initializeApp({
-            credential: admin.credential ? admin.credential.cert(serviceAccount) : {
-              getAccessToken: () => Promise.resolve({ access_token: "", expires_in: 0 }),
-              cert: serviceAccount
-            },
-            projectId: serviceAccount.project_id,
-            storageBucket: "jubilee-command-center---dev.appspot.com"
-          });
-          console.log("🚀 Firebase core bound successfully via direct object mapping!");
-        } else {
-          admin.initializeApp({
-            projectId: "jubilee-command-center---dev"
-          });
-        }
-      } catch (error: any) {
-        console.warn("⚠️ Firebase Admin initialization logic fallback triggered.");
+    if (!authorEmail || !bookTitle) {
+      return NextResponse.json({ success: false, error: "Missing core deployment identifiers." }, { status: 400 });
+    }
+
+    // Initialize Firebase Admin cleanly
+    if (getApps().length === 0) {
+      const keyPath = path.resolve(process.cwd(), "secrets/firebase-service-account.json");
+      if (fs.existsSync(keyPath)) {
+        const serviceAccount = JSON.parse(fs.readFileSync(keyPath, "utf8"));
+        initializeApp({
+          credential: cert(serviceAccount),
+          projectId: serviceAccount.project_id,
+        });
+      } else {
+        initializeApp({ projectId: "jubilee-command-center---dev" });
       }
     }
 
-    const db = admin && admin.apps && admin.apps.length ? admin.firestore() : null;
+    const adminDb = getFirestore();
+    const authorSlug = "kendall"; 
+    const cleanBookSlug = bookTitle.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/(^_|_$)/g, '');
+    const assetKey = `abk_${authorSlug}_${cleanBookSlug}`;
 
-    if (!db) {
-      return NextResponse.json({ authenticated: false, error: "Database engine offline." }, { status: 503 });
+    // Compile everything we've built for the Firestore write payload
+    const writePayload: any = {
+      id: assetKey,
+      assetKey: assetKey,
+      authorSlug: authorSlug,
+      authorEmail: authorEmail,
+      title: bookTitle,
+      price: price.toString(),
+      type: type, 
+      synopsis: synopsis || "",
+      status: statusState, 
+      sections: sections || ["Featured Publications"],
+      coverArtUrl: coverUrl || "",
+      bgImageUrl: bgImageUrl || "",
+      createdAt: new Date().toISOString()
+    };
+
+    if (type === "E-Book") {
+      writePayload.ebookPayload = ebookPayload || {
+        fontPreference: "Atkinson Hyperlegible",
+        chapters: [{ id: `${assetKey}_ch1`, title: "Chapter 1", textContent: "Staged canvas template text." }]
+      };
     }
 
-    // 🚀 FIXED: Dynamically build the query based on the available verification channel
-    const entitlementsRef = db.collection("entitlements");
-    let queryRef = entitlementsRef.where("assetKey", "==", assetKey).where("status", "==", "active");
+    // Write clean data row straight to Firestore
+    const productRef = adminDb.collection("products").doc(assetKey);
+    await productRef.set(writePayload, { merge: true });
 
-    if (activeEmail) {
-      queryRef = queryRef.where("userEmail", "==", activeEmail);
-    } else if (activePhone) {
-      // Clean up local phone string variations defensively to match international formats (+1)
-      const cleanPhone = activePhone.replace(/[^0-9+]/g, "");
-      const formattedPhone = cleanPhone.startsWith("+") ? cleanPhone : `+1${cleanPhone}`;
-      queryRef = queryRef.where("userPhone", "==", formattedPhone);
-    }
+    // Pack the outbound payload cleanly inside an isolated local data block to prevent any compilation token errors
+    const syncPayload = {
+      authorEmail: "dev-email@wpengine.local",
+      author_email: "dev-email@wpengine.local",
+      authorSlug: authorSlug,
+      author_slug: authorSlug,
+      bookTitle: bookTitle,
+      title: bookTitle,
+      book_title: bookTitle,
+      bookSlug: cleanBookSlug.replace(/_/g, '-'),
+      slug: cleanBookSlug.replace(/_/g, '-'),
+      book_slug: cleanBookSlug.replace(/_/g, '-'),
+      assetKey: assetKey,
+      asset_key: assetKey,
+      koba_asset_key: assetKey,
+      coverArt: coverUrl || "",
+      cover_url: coverUrl || "",
+      bgImage: bgImageUrl || "",
+      bg_image: bgImageUrl || "",
+      type: type, 
+      price: price.toString(),
+      _price: price.toString(),
+      _koba_price: price.toString()
+    };
 
-    const snapshot = await queryRef.get();
+    let targetWpDomain = "koba-dev.local"; 
+    const wpPublishUrl = `http://${targetWpDomain}/wp-json/kobai/v1/update-chapter-audio`;
 
-    if (snapshot.empty) {
-      return NextResponse.json({ authenticated: false, owned: false, message: "No valid active entitlement verified." }, { 
-        status: 200,
-        headers: { "Access-Control-Allow-Origin": "*" }
-      });
-    }
+    // Fire network handshake to WordPress
+    const wpResponse = await fetch(wpPublishUrl, {
+      method: "POST",
+      headers: { 
+        "Content-Type": "application/json",
+        "X-KOBA-KEY": "JUBI-TEST-1234-5678" 
+      },
+      body: JSON.stringify(syncPayload)
+    });
 
-    const entitlementData = snapshot.docs[0].data();
+    let wpResult = { success: false, message: "No initial bridge tracking captured." };
+    const contentType = wpResponse.headers.get("content-type");
 
-    // Cryptographic Signed URL Generation
-    const bucket = admin.storage().bucket("jubilee-command-center---dev.appspot.com");
-    const secureFile = bucket.file(`vault/audiobooks/${assetKey}.mp3`);
-
-    let streamUrl = null;
-    try {
-      const [generatedUrl] = await secureFile.getSignedUrl({
-        version: "v4",
-        action: "read",
-        expires: Date.now() + 2 * 60 * 60 * 1000, // 2 hours authorization longevity
-      });
-      streamUrl = generatedUrl;
-    } catch (signatureError) {
-      console.error("Failed to generate cryptographic key:", signatureError);
+    if (wpResponse.ok && contentType && contentType.includes("application/json")) {
+      wpResult = await wpResponse.json();
+    } else {
+      const errorText = await wpResponse.text();
+      console.warn("⚠️ WordPress Handshake Stalled:", errorText);
+      return NextResponse.json({
+        success: false,
+        error: "WordPress destination server dropped an invalid format.",
+        details: errorText.substring(0, 200)
+      }, { status: 502 });
     }
 
     return NextResponse.json({
-      authenticated: true,
-      owned: true,
-      unlockedAt: entitlementData.purchasedAt || new Date().toISOString(),
-      invoiceUrl: entitlementData.stripeSessionId || "free_bypass_token",
-      assetType: entitlementData.type || "Audiobook",
-      streamUrl: streamUrl,
-      message: "Access Authorization Granted. Cryptographic key generated.",
-    }, {
-      status: 200,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      }
-    });
+      success: true,
+      assetKey: assetKey,
+      authorSlug: authorSlug,
+      wpDeployment: wpResult
+    }, { status: 200 });
 
   } catch (error: any) {
-    console.error("❌ Entitlement verification crash sequence:", error);
-    return NextResponse.json({ authenticated: false, error: "Internal server verification breakdown." }, { status: 500 });
+    console.error("❌ Agent Autonomous Deployment Fault:", error.message);
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
-}
-
-export async function OPTIONS() {
-  return new NextResponse(null, {
-    status: 200,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
-    },
-  });
 }

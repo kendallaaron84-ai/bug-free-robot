@@ -1,7 +1,7 @@
 // app/api/products/public/route.ts
 import { NextResponse } from "next/server";
 import { getApps, initializeApp, cert } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore"; // 🔑 Use Admin Firestore to bypass public security gates
+import { getFirestore } from "firebase-admin/firestore";
 import path from "path";
 import fs from "fs";
 
@@ -10,18 +10,15 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const authorSlug = searchParams.get("author") || "global";
-    const readerEmail = searchParams.get("email") ? searchParams.get("email")!.trim().toLowerCase() : "";
+    const authorSlug = searchParams.get("author") || "kendall";
+    const readerEmail = searchParams.get("email")?.toLowerCase().trim() || null;
+    const readerPhone = searchParams.get("phone") || null;
 
-    // 1. PRIVILEGED FIREBASE ADMIN INITIALIZATION
     if (getApps().length === 0) {
       const keyPath = path.resolve(process.cwd(), "secrets/firebase-service-account.json");
       if (fs.existsSync(keyPath)) {
         const serviceAccount = JSON.parse(fs.readFileSync(keyPath, "utf8"));
-        initializeApp({
-          credential: cert(serviceAccount),
-          projectId: serviceAccount.project_id,
-        });
+        initializeApp({ credential: cert(serviceAccount), projectId: serviceAccount.project_id });
       } else {
         initializeApp({ projectId: "jubilee-command-center---dev" });
       }
@@ -29,56 +26,47 @@ export async function GET(request: Request) {
 
     const adminDb = getFirestore();
 
-    // 2. Fetch Active Products for the designated Author via Superuser
-    const productsCollection = adminDb.collection("products");
-    let snapshot;
+    // 🚀 FIX 1: ENFORCE STATUS CHECK - Grabs ONLY active products, completely hiding Drafts!
+    const productsSnapshot = await adminDb.collection("products")
+      .where("authorSlug", "==", authorSlug)
+      .where("status", "==", "Active")
+      .get();
 
-    if (authorSlug === "global") {
-      snapshot = await productsCollection.where("status", "==", "Active").get();
-    } else {
-      snapshot = await productsCollection
-        .where("authorSlug", "==", authorSlug)
-        .where("status", "==", "Active")
-        .get();
-    }
+    const productsList = productsSnapshot.docs.map(doc => doc.data());
 
-    const productsList: any[] = [];
-    snapshot.forEach((doc) => {
-      productsList.push({ id: doc.id, ...doc.data() });
-    });
-
-    // 3. Fetch Reader Entitlements dynamically if an email exists
+    // 🚀 FIX 2: DYNAMIC DUAL-CHANNEL ENTITLEMENT QUERY
     const entitlementsList: string[] = [];
+    const entitlementsRef = adminDb.collection("entitlements");
+
     if (readerEmail) {
-      const entSnapshot = await adminDb.collection("entitlements")
+      const emailSnapshot = await entitlementsRef
         .where("userEmail", "==", readerEmail)
         .where("status", "==", "Active")
         .get();
-
-      entSnapshot.forEach((doc) => {
-        const data = doc.data();
-        if (data.assetKey) {
-          entitlementsList.push(data.assetKey);
-        }
-      });
+      emailSnapshot.forEach(doc => entitlementsList.push(doc.data().assetKey));
     }
 
-    // 4. Return unified payload with permissive CORS headers for local testing
+    if (readerPhone) {
+      const cleanPhone = readerPhone.replace(/[^0-9+]/g, "");
+      const formattedPhone = cleanPhone.startsWith("+") ? cleanPhone : `+1${cleanPhone}`;
+      
+      const phoneSnapshot = await entitlementsRef
+        .where("userPhone", "==", formattedPhone)
+        .where("status", "==", "Active")
+        .get();
+      phoneSnapshot.forEach(doc => entitlementsList.push(doc.data().assetKey));
+    }
+
     return NextResponse.json({
       success: true,
       products: productsList,
-      entitlements: entitlementsList
+      entitlements: [...new Set(entitlementsList)] // Removes any duplicate tracking references cleanly
     }, {
       status: 200,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type"
-      }
+      headers: { "Access-Control-Allow-Origin": "*" }
     });
 
   } catch (error: any) {
-    console.error("❌ Public Products Retrieval Error:", error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
