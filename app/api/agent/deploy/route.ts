@@ -1,7 +1,5 @@
-// app/api/agent/deploy/route.ts
+// app/api/verify-entitlement/route.ts
 import { NextResponse } from "next/server";
-import { getApps, initializeApp, cert } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore"; 
 import path from "path";
 import fs from "fs";
 
@@ -10,140 +8,129 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { 
-      authorEmail, 
-      authorName, 
-      bookTitle, 
-      price, 
-      type, 
-      synopsis, 
-      sections, 
-      coverUrl, 
-      bgImageUrl,
-      ebookPayload 
-    } = body;
+    const { userEmail, userPhone, phone, assetKey, requestingDomain } = body;
 
-    if (!authorEmail || !bookTitle || (price === undefined || price === null || price === "")) {
-      return NextResponse.json({ success: false, error: "Missing required deployment fields." }, { status: 400 });
+    // 🚀 FIXED: Allow verification if EITHER email or phone is present alongside the assetKey
+    const activeEmail = userEmail ? userEmail.toLowerCase().trim() : null;
+    const activePhone = phone || userPhone || null;
+
+    if (!assetKey || (!activeEmail && !activePhone)) {
+      return NextResponse.json({ 
+        authenticated: false, 
+        error: "Missing required identification keys. Provide email or phone context." 
+      }, { 
+        status: 400,
+        headers: { "Access-Control-Allow-Origin": "*" }
+      });
     }
 
-    if (getApps().length === 0) {
-      const keyPath = path.resolve(process.cwd(), "secrets/firebase-service-account.json");
-      if (fs.existsSync(keyPath)) {
-        const serviceAccount = JSON.parse(fs.readFileSync(keyPath, "utf8"));
-        initializeApp({
-          credential: cert(serviceAccount),
-          projectId: serviceAccount.project_id,
-        });
-      } else {
-        initializeApp({ projectId: "jubilee-command-center---dev" });
-      }
-    }
+    // 🔥 Dynamic runtime import with default export mapping
+    const firebaseAdmin = require("firebase-admin");
+    const admin = firebaseAdmin.default || firebaseAdmin;
 
-    const adminDb = getFirestore();
-    const authorSlug = "kendall"; 
-    const cleanBookSlug = bookTitle.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/(^_|_$)/g, '');
-    const assetKey = `abk_${authorSlug}_${cleanBookSlug}`;
-
-    let finalEbookPayload = null;
-    if (type === "E-Book") {
-      finalEbookPayload = ebookPayload || {
-        fontPreference: "Atkinson Hyperlegible",
-        chapters: [
-          {
-            id: `${assetKey}_ebk_ch1`,
-            title: "Chapter 1: Rain-Slicked Subnets",
-            textContent: "The corporate neon reflected heavily in the pooling oil along the lower balcony floors..."
-          }
-        ]
-      };
-    }
-
-    const writePayload: any = {
-      id: assetKey,
-      assetKey: assetKey,
-      authorSlug: authorSlug,
-      authorEmail: authorEmail,
-      title: bookTitle,
-      price: price.toString(),
-      type: type, 
-      synopsis: synopsis || "",
-      status: "Active",
-      sections: sections || ["Featured Publications"],
-      coverArtUrl: coverUrl || "",
-      bgImageUrl: bgImageUrl || "",
-      createdAt: new Date().toISOString()
-    };
-
-    if (finalEbookPayload) {
-      writePayload.ebookPayload = finalEbookPayload;
-    }
-
-    const productRef = adminDb.collection("products").doc(assetKey);
-    await productRef.set(writePayload, { merge: true });
-
-    if (price.toString() === "0.00" || price.toString() === "0") {
-      const entitlementsRef = adminDb.collection("entitlements");
-      const entitlementQuery = await entitlementsRef.where("assetKey", "==", assetKey).get();
-
-      if (!entitlementQuery.empty) {
-        for (const doc of entitlementQuery.docs) {
-          await doc.ref.update({ type: type });
+    // 🔑 Safety check before ever touching .length
+    if (!admin || !admin.apps || !admin.apps.length) {
+      try {
+        const keyPath = path.resolve(process.cwd(), "secrets/firebase-service-account.json");
+        
+        if (fs.existsSync(keyPath)) {
+          const serviceAccount = JSON.parse(fs.readFileSync(keyPath, "utf8"));
+          
+          admin.initializeApp({
+            credential: admin.credential ? admin.credential.cert(serviceAccount) : {
+              getAccessToken: () => Promise.resolve({ access_token: "", expires_in: 0 }),
+              cert: serviceAccount
+            },
+            projectId: serviceAccount.project_id,
+            storageBucket: "jubilee-command-center---dev.appspot.com"
+          });
+          console.log("🚀 Firebase core bound successfully via direct object mapping!");
+        } else {
+          admin.initializeApp({
+            projectId: "jubilee-command-center---dev"
+          });
         }
-      } else {
-        const fallbackEntId = `ent_free_${Math.random().toString(36).substring(2, 11)}`;
-        await entitlementsRef.doc(fallbackEntId).set({
-          id: fallbackEntId,
-          assetKey: assetKey,
-          userEmail: "dev-email@wpengine.local", 
-          type: type, 
-          status: "active",
-          purchasedAt: new Date().toISOString(),
-          expiresAt: null,
-          stripeSessionId: "free_bypass_token"
-        });
+      } catch (error: any) {
+        console.warn("⚠️ Firebase Admin initialization logic fallback triggered.");
       }
     }
 
-    let targetWpDomain = "koba-dev.local"; 
-    if (authorEmail.includes("sharon")) targetWpDomain = "audio.sharon-meeks.com";
-    
-    const wpPublishUrl = `http://${targetWpDomain}/wp-json/kobai/v1/publish-vault`;
-    const emailForWordPress = targetWpDomain === "koba-dev.local" ? "dev-email@wpengine.local" : authorEmail;
+    const db = admin && admin.apps && admin.apps.length ? admin.firestore() : null;
 
-    const wpResponse = await fetch(wpPublishUrl, {
-      method: "POST",
-      headers: { 
-        "Content-Type": "application/json",
-        "X-KOBA-KEY": "JUBI-TEST-1234-5678" 
-      },
-      body: JSON.stringify({
-        authorEmail: emailForWordPress,
-        authorSlug: authorSlug,
-        bookTitle: bookTitle,
-        bookSlug: cleanBookSlug.replace(/_/g, '-'),
-        assetKey: assetKey,
-        coverArt: coverUrl || "",
-        bgImage: bgImageUrl || "",
-        type: type, 
-        price: price.toString()
-      })
-    });
+    if (!db) {
+      return NextResponse.json({ authenticated: false, error: "Database engine offline." }, { status: 503 });
+    }
 
-    const wpResult = await wpResponse.json();
+    // 🚀 FIXED: Dynamically build the query based on the available verification channel
+    const entitlementsRef = db.collection("entitlements");
+    let queryRef = entitlementsRef.where("assetKey", "==", assetKey).where("status", "==", "active");
+
+    if (activeEmail) {
+      queryRef = queryRef.where("userEmail", "==", activeEmail);
+    } else if (activePhone) {
+      // Clean up local phone string variations defensively to match international formats (+1)
+      const cleanPhone = activePhone.replace(/[^0-9+]/g, "");
+      const formattedPhone = cleanPhone.startsWith("+") ? cleanPhone : `+1${cleanPhone}`;
+      queryRef = queryRef.where("userPhone", "==", formattedPhone);
+    }
+
+    const snapshot = await queryRef.get();
+
+    if (snapshot.empty) {
+      return NextResponse.json({ authenticated: false, owned: false, message: "No valid active entitlement verified." }, { 
+        status: 200,
+        headers: { "Access-Control-Allow-Origin": "*" }
+      });
+    }
+
+    const entitlementData = snapshot.docs[0].data();
+
+    // Cryptographic Signed URL Generation
+    const bucket = admin.storage().bucket("jubilee-command-center---dev.appspot.com");
+    const secureFile = bucket.file(`vault/audiobooks/${assetKey}.mp3`);
+
+    let streamUrl = null;
+    try {
+      const [generatedUrl] = await secureFile.getSignedUrl({
+        version: "v4",
+        action: "read",
+        expires: Date.now() + 2 * 60 * 60 * 1000, // 2 hours authorization longevity
+      });
+      streamUrl = generatedUrl;
+    } catch (signatureError) {
+      console.error("Failed to generate cryptographic key:", signatureError);
+    }
 
     return NextResponse.json({
-      success: true,
-      assetKey: assetKey,
-      authorSlug: authorSlug,
-      wpDeployment: wpResult
+      authenticated: true,
+      owned: true,
+      unlockedAt: entitlementData.purchasedAt || new Date().toISOString(),
+      invoiceUrl: entitlementData.stripeSessionId || "free_bypass_token",
+      assetType: entitlementData.type || "Audiobook",
+      streamUrl: streamUrl,
+      message: "Access Authorization Granted. Cryptographic key generated.",
     }, {
       status: 200,
-      headers: { "Access-Control-Allow-Origin": "*" }
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      }
     });
 
   } catch (error: any) {
-    console.error("❌ Agent Autonomous Deployment Fault:", error.message);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    console.error("❌ Entitlement verification crash sequence:", error);
+    return NextResponse.json({ authenticated: false, error: "Internal server verification breakdown." }, { status: 500 });
   }
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 200,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    },
+  });
 }

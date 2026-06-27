@@ -15,7 +15,8 @@ import {
     Package,
 	Sliders,
 	Database,
-	Activity
+	Activity,
+    Documentation,
 } from "lucide-react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
@@ -54,6 +55,7 @@ const navigationSections: NavSection[] = [
             { title: "Deployments", icon: Layers, href: "/deployments", badge: null },
             { title: "Billing & Licenses", icon: CreditCard, href: "/billing", badge: null },
             { title: "Settings", icon: Settings, href: "/settings", badge: null },
+            { title: "Documentation", icon: BarChart3, href: "/documentation", badge: null },
         ],
     },
     {

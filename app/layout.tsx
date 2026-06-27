@@ -4,7 +4,7 @@ import { ThemeProvider } from "@/components/elements/theme-provider"; // <-- Upd
 
 export const metadata = {
   title: "KOBA-I Audio — Jubilee Dashboard",
-  description: "Advanced infrastructure and automated content engine management console.",
+  description: "Production Studio | Automanted Content Management Console.",
 };
 
 export default function RootLayout({
