@@ -1,11 +1,16 @@
 // app/api/auth/sms-send/route.ts
 import { NextResponse } from "next/server";
 import twilio from "twilio";
-import { initializeApp, getApps, cert } from "firebase-admin/app"; // 🚀 Target sub-paths directly
-import { getFirestore } from "firebase-admin/firestore";          // 🚀 Target Firestore directly
+import { initializeApp, getApps, cert } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
+import path from "path";
+import fs from "fs";
+
+export const dynamic = "force-dynamic";
 
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "https://koba-dev.local",
+  // Fixed to match local WordPress protocol
+  "Access-Control-Allow-Origin": "http://koba-dev.local", 
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
   "Access-Control-Allow-Credentials": "true",
@@ -19,32 +24,36 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: "Phone number required." }, { status: 400, headers: corsHeaders });
     }
 
-    // app/api/auth/sms-send/route.ts
-
-    // Strip out everything except numbers
-    let cleanPhone = phoneNumber.trim().replace(/[^0-9]/g, "");
-
-    // If it's a standard 10-digit US number, prepend +1
-    if (cleanPhone.length === 10) {
-      cleanPhone = `+1${cleanPhone}`;
-    } 
-    // If they typed the 1 but forgot the plus sign (11 digits), prepend +
-    else if (cleanPhone.length === 11 && cleanPhone.startsWith("1")) {
-      cleanPhone = `+${cleanPhone}`;
-    } 
-    // Fallback case if they actually typed the plus sign originally
-    else if (phoneNumber.includes("+")) {
-      cleanPhone = `+${cleanPhone}`;
+    // 🚀 INTERNATIONAL E.164 PHONE SANITIZATION
+    let cleanPhone = phoneNumber.trim();
+    
+    if (cleanPhone.startsWith("+")) {
+      // If user provided the +, respect their country code entirely
+      cleanPhone = "+" + cleanPhone.replace(/[^0-9]/g, "");
+    } else {
+      // Strip everything to check length
+      const rawDigits = cleanPhone.replace(/[^0-9]/g, "");
+      if (rawDigits.length === 10) {
+        cleanPhone = "+1" + rawDigits; // Standardize US/CA implicitly
+      } else {
+        cleanPhone = "+" + rawDigits;  // Blindly prepend + for international users who forgot it
+      }
     }
 
-    // 🛠️ FAIL-SAFE MODULAR INITIALIZATION
+    // 🛠️ FIREBASE ADMIN CREDENTIAL MOUNT (FIXED)
     if (getApps().length === 0) {
-      initializeApp({
-        projectId: "jubilee-command-center---dev"
-      });
+      const keyPath = path.resolve(process.cwd(), "secrets/firebase-service-account.json");
+      if (fs.existsSync(keyPath)) {
+        const serviceAccount = JSON.parse(fs.readFileSync(keyPath, "utf8"));
+        initializeApp({
+          credential: cert(serviceAccount),
+          projectId: serviceAccount.project_id,
+        });
+      } else {
+        initializeApp({ projectId: "jubilee-command-center---dev" });
+      }
     }
 
-    // Explicitly grab the DB connection using the standalone function
     const db = getFirestore();
     const entitlementsRef = db.collection("entitlements");
     
@@ -56,12 +65,36 @@ export async function POST(request: Request) {
       queryRef = queryRef.where("assetKey", "==", assetKey.trim());
     }
 
-    const snapshot = await queryRef.get();
-
+    // 🔎 DIAGNOSTIC INSPECTOR: Dumping the collection state to logs
+    console.log("🚀 Running Diagnostic Entitlement Fetch...");
+    const snapshot = await entitlementsRef
+      .where("userPhone", "==", cleanPhone)
+      .where("status", "==", "active")
+      .get();
+    
     if (snapshot.empty) {
+      console.error(`❌ Access Denied: User [+${cleanPhone}] has no ecosystem entitlements.`);
       return NextResponse.json({ 
         success: false, 
-        error: `No active entitlement found for phone ${cleanPhone} matching asset key.` 
+        error: "No active purchases found for this phone number." 
+      }, { status: 404, headers: corsHeaders });
+    }
+
+    // Attempt the specific match only after logging
+    const targetPhone = cleanPhone.replace(/\D/g, '');
+    const foundRecord = snapshot.docs.find(doc => {
+        const d = doc.data();
+        const storedPhone = (d.userPhone || '').replace(/\D/g, '');
+        const storedAsset = (d.assetKey || '').trim();
+        const match = (storedPhone === targetPhone) && (storedAsset === assetKey.trim());
+        return match;
+    });
+
+    if (!foundRecord) {
+      console.error(`❌ Access Denied: No record found for [${cleanPhone}] among ${snapshot.size} candidates.`);
+      return NextResponse.json({ 
+        success: false, 
+        error: `No active entitlement found for phone ${cleanPhone}.` 
       }, { status: 404, headers: corsHeaders });
     }
 

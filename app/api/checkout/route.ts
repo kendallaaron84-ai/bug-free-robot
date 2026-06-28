@@ -59,9 +59,12 @@ export async function POST(request: Request) {
     const cleanSlug = (productData.title || "freedom-fighter").toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
     // Initialize the checkout sequence directly on behalf of your connected account
+    // Ensure metadata matches your webhook extraction variables exactly
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       payment_method_types: ["card"],
+      // Allow Stripe to collect the phone number automatically at checkout!
+      phone_number_collection: { enabled: true },
       line_items: [
         {
           price_data: {
@@ -80,7 +83,9 @@ export async function POST(request: Request) {
       cancel_url: `${baseDomain}/koba_publication/${cleanSlug}/?canceled=true`,
       metadata: {
         assetKey: assetKey,
-        authorEmail: productData.authorEmail || "kendallaaron84@gmail.com",
+        user_email: productData.authorEmail || "kendallaaron84@gmail.com",
+        productType: productData.type || "Audiobook",
+        originDomain: "koba-dev.local"
       },
     }, {
       stripeAccount: stripeConnectId,
