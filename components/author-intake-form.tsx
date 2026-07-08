@@ -15,6 +15,7 @@ export function AuthorIntakeForm() {
     title: "",
     brand: "personal",
     audience: "",
+    readingLevel: "8th_grade",
     description: ""
   });
 
@@ -48,8 +49,10 @@ export function AuthorIntakeForm() {
         title: formData.title, // Saved twice to support both your pipeline pages
         brandAllocation: formData.brand,
         targetAudience: formData.audience,
+        readingLevel: formData.readingLevel,
         synopsis: formData.description,
         executionState: "initializing",
+        requiresSystemInstruction: true, // Flag for the Nexus Engine to use systemInstruction parameter
         createdAt: serverTimestamp(),
       });
 
@@ -59,7 +62,7 @@ export function AuthorIntakeForm() {
       });
 
       // Clear the form for the next request
-      setFormData({ title: "", brand: "personal", audience: "", description: "" });
+      setFormData({ title: "", brand: "personal", audience: "", readingLevel: "8th_grade", description: "" });
       
     } catch (error: any) {
       console.error("Pipeline submission error:", error);
@@ -128,6 +131,22 @@ export function AuthorIntakeForm() {
               className="w-full bg-slate-950/50 border border-border rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-emerald-500/50 transition-colors"
               placeholder="e.g. Noir Thriller Fans"
             />
+          </div>
+
+          {/* Reading Level */}
+          <div className="space-y-1.5 col-span-2">
+            <label className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+              <FileText className="w-3 h-3" /> Reading Level / Tone strictness
+            </label>
+            <select 
+              value={formData.readingLevel}
+              onChange={(e) => setFormData({...formData, readingLevel: e.target.value})}
+              className="w-full bg-slate-950/50 border border-border rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-emerald-500/50 transition-colors appearance-none"
+            >
+              <option value="5th_grade">5th Grade (Simple, Direct)</option>
+              <option value="8th_grade">8th Grade (Standard Audience)</option>
+              <option value="college">College Level (Academic/Complex)</option>
+            </select>
           </div>
         </div>
 
